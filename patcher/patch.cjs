@@ -95,6 +95,18 @@ function getAsarHeaderSha256(asarPath) {
 // ---------------------------------------------------------------------------
 const PATCH_TAG = "__oct_isQuitting";
 
+function replaceRequired(source, regex, replacement, description) {
+  const flags = regex.flags.includes("g") ? regex.flags : `${regex.flags}g`;
+  const matches = source.match(new RegExp(regex.source, flags));
+  if (!matches || matches.length !== 1) {
+    throw new Error(
+      `${description} anchor matched ${matches ? matches.length : 0} times; expected exactly once`
+    );
+  }
+  console.log(`  -> ${description}`);
+  return source.replace(regex, replacement);
+}
+
 // ---------------------------------------------------------------------------
 console.log("===========================================================");
 console.log("    opencode-close-to-tray patcher  v1.0.0");
@@ -164,24 +176,15 @@ let code = fs.readFileSync(mainPath, "utf8");
 // We inject a close handler BEFORE the closed handler that intercepts
 // the X button: if not quitting, preventDefault + hide window.
 const anchorRegex =
-  /win\.on\("closed",\(\)=>\{registry\.closed\(id\)\}\);/;
-const anchorMatch = anchorRegex.exec(code);
-
-if (!anchorMatch) {
-  console.error("[ERROR] registerWindow anchor not found!");
-  console.error("opencode main code structure may have changed.");
-  console.error("Please file an issue at the project repository.");
-  process.exit(1);
-}
-
-const fullAnchor = anchorMatch[0];
-
-const closePatch = `win.on("close",(e)=>{if(!global[${JSON.stringify(
-  PATCH_TAG
-)}]){e.preventDefault();win.hide();if(!global.__oct_balloonShown){global.__oct_balloonShown=true;try{require("node:net").connect("\\\\\\\\.\\\\pipe\\\\opencode-tray-balloon",()=>{}).on("error",()=>{});}catch(__e){}}}});${fullAnchor}`;
-
-code = code.replace(fullAnchor, closePatch);
-console.log("  -> close-to-tray handler injected");
+  /win\.on\(\s*"closed"\s*,\s*\(\)\s*=>\s*registry\.closed\(id\)\s*\);/;
+code = replaceRequired(
+  code,
+  anchorRegex,
+  (anchor) => `win.on("close",(event)=>{if(!globalThis[${JSON.stringify(
+    PATCH_TAG
+  )}]){event.preventDefault();win.hide();}});${anchor}`,
+  "close-to-tray handler injected"
+);
 
 // --- Patch B: Fix window-all-closed to respect quitting flag ---
 // Original: app.on("window-all-closed", () => {
@@ -189,108 +192,77 @@ console.log("  -> close-to-tray handler injected");
 //   app.quit();
 // });
 // Patched: only quit if isQuitting flag is set (so hiding window doesn't quit)
-const wacAnchor =
-  'app.on("window-all-closed",()=>{if(process.platform==="darwin")return;app.quit();});';
-const wacRegex = /app\.on\("window-all-closed",\(\)=>\{if\(process\.platform==="darwin"\)return;app\.quit\(\);\}\);/;
-const wacMatch = wacRegex.exec(code);
-
-if (wacMatch) {
-  const wacPatched = `app.on("window-all-closed",()=>{if(process.platform==="darwin")return;if(global[${JSON.stringify(
+const wacRegex = /app\.on\(\s*"window-all-closed"\s*,\s*\(\)\s*=>\s*\{\s*if\s*\(\s*process\.platform\s*===\s*"darwin"\s*\)\s*return;\s*app\.quit\(\);\s*\}\s*\);/;
+code = replaceRequired(
+  code,
+  wacRegex,
+  `app.on("window-all-closed",()=>{if(process.platform==="darwin")return;if(globalThis[${JSON.stringify(
     PATCH_TAG
-  )}]){app.quit();}});`;
-  code = code.replace(wacMatch[0], wacPatched);
-  console.log("  -> window-all-closed patched");
-} else {
-  console.log("  [warn] window-all-closed anchor not found (may have changed)");
-}
+  )}]){app.quit();}});`,
+  "window-all-closed patched"
+);
 
 // --- Patch C: Set quitting flag in before-quit ---
 // Original: app.on("before-quit", () => { setAppQuitting(); ... });
 // We also set our flag so window-all-closed lets it quit.
-const bqRegex = /app\.on\("before-quit",\(\)=>\{setAppQuitting\(\);/;
-const bqMatch = bqRegex.exec(code);
-if (bqMatch) {
-  code = code.replace(
-    bqMatch[0],
-    `app.on("before-quit",()=>{global[${JSON.stringify(
-      PATCH_TAG
-    )}]=true;setAppQuitting();`
-  );
-  console.log("  -> before-quit patched");
-} else {
-  console.log("  [warn] before-quit anchor not found");
-}
+const bqRegex = /app\.on\(\s*"before-quit"\s*,\s*\(\)\s*=>\s*\{\s*setAppQuitting\(\);/;
+code = replaceRequired(
+  code,
+  bqRegex,
+  `app.on("before-quit",()=>{globalThis[${JSON.stringify(
+    PATCH_TAG
+  )}]=true;setAppQuitting();`,
+  "before-quit patched"
+);
 
 // --- Patch D: Set quitting flag in will-quit ---
-const wqRegex = /app\.on\("will-quit",\(\)=>\{setAppQuitting\(\);/;
-const wqMatch = wqRegex.exec(code);
-if (wqMatch) {
-  code = code.replace(
-    wqMatch[0],
-    `app.on("will-quit",()=>{global[${JSON.stringify(
-      PATCH_TAG
-    )}]=true;setAppQuitting();`
-  );
-  console.log("  -> will-quit patched");
-}
+const wqRegex = /app\.on\(\s*"will-quit"\s*,\s*\(\)\s*=>\s*\{\s*setAppQuitting\(\);/;
+code = replaceRequired(
+  code,
+  wqRegex,
+  `app.on("will-quit",()=>{globalThis[${JSON.stringify(
+    PATCH_TAG
+  )}]=true;setAppQuitting();`,
+  "will-quit patched"
+);
 
 // --- Patch E: Spawn tray helper on window creation ---
 // Inject after registerWindow(win, id) call in createMainWindow
-const rwAnchor = "registerWindow(win, id);";
-const rwIdx = code.indexOf(rwAnchor);
-if (rwIdx !== -1) {
-  const spawnPatch = `${rwAnchor}
-  try{const __oct_cp=require("node:child_process");const __oct_path=require("node:path");const __oct_hp=__oct_path.join(process.resourcesPath,"tray-helper.ps1");if(require("node:fs").existsSync(__oct_hp)){const __oct_p=__oct_cp.spawn("powershell.exe",["-NoProfile","-ExecutionPolicy","Bypass","-File",__oct_hp,"-PipeName","opencode-tray-pipe","-TargetPid",String(process.pid)],{windowsHide:true,stdio:"ignore"});__oct_p.unref();}}catch(__e){}`;
-  code = code.replace(rwAnchor, spawnPatch);
-  console.log("  -> tray helper spawn injected");
-} else {
-  console.log("  [warn] registerWindow call anchor not found");
-}
+const rwAnchor = /registerWindow\(\s*win\s*,\s*id\s*\);/;
+code = replaceRequired(
+  code,
+  rwAnchor,
+  (anchor) => `${anchor}
+  if(!globalThis.__oct_trayHelperStarted){globalThis.__oct_trayHelperStarted=true;try{const __oct_cp=require2("node:child_process");const __oct_path=require2("node:path");const __oct_fs=require2("node:fs");const __oct_hp=__oct_path.join(process.resourcesPath,"tray-helper.ps1");if(__oct_fs.existsSync(__oct_hp)){const __oct_p=__oct_cp.spawn("powershell.exe",["-NoProfile","-ExecutionPolicy","Bypass","-File",__oct_hp,"-PipeName","opencode-tray-pipe","-TargetPid",String(process.pid)],{windowsHide:true,stdio:"ignore"});__oct_p.unref();}}catch(__e){globalThis.__oct_trayHelperStarted=false;console.error("opencode-close-to-tray: failed to start tray helper",__e);}}`,
+  "tray helper spawn injected"
+);
 
-// --- Patch F: Handle second-instance (show window when clicking shortcut) ---
-const siRegex = /app\.on\("second-instance",\(\)=>\{/;
-const siMatch = siRegex.exec(code);
-if (siMatch) {
-  // Find the matching block and inject show logic at the start
-  const insertPos = siMatch.index + siMatch[0].length;
-  code =
-    code.slice(0, insertPos) +
-    '{const __oct_w=require("electron").BrowserWindow.getAllWindows()[0];if(__oct_w){if(__oct_w.isMinimized())__oct_w.restore();__oct_w.show();__oct_w.focus();}' +
-    code.slice(insertPos);
-  // Remove the duplicate opening brace by replacing the original
-  // Actually simpler: just insert show logic before the block content
-  // The above adds a new block — let's fix by not duplicating the brace
-  // Revert and use a cleaner approach
-  code = code.replace(
-    siMatch[0] + '{const __oct_w=require("electron").BrowserWindow.getAllWindows()[0];if(__oct_w){if(__oct_w.isMinimized())__oct_w.restore();__oct_w.show();__oct_w.focus();}',
-    siMatch[0] + 'const __oct_w=require("electron").BrowserWindow.getAllWindows()[0];if(__oct_w){if(__oct_w.isMinimized())__oct_w.restore();__oct_w.show();__oct_w.focus();}'
-  );
-  console.log("  -> second-instance handler patched");
-}
+// OpenCode already restores and focuses the window in its second-instance handler.
 
 // --- Patch G: Named pipe server for tray commands (SHOW/QUIT) ---
 // Inject near the end of the file, before the last expression
 const pipeServerCode = `
 // --- opencode-close-to-tray: pipe server for tray helper ---
 try{
-  const __oct_net=require("node:net");
+  const __oct_net=require2("node:net");
+  const __oct_electron=require2("electron");
   const __oct_pipe="\\\\\\\\.\\\\pipe\\\\opencode-tray-pipe";
   const __oct_server=__oct_net.createServer((socket)=>{
     socket.on("data",(buf)=>{
       const cmd=buf.toString().trim();
       if(cmd==="SHOW"){
-        const w=require("electron").BrowserWindow.getAllWindows()[0];
+        const w=__oct_electron.BrowserWindow.getAllWindows()[0];
         if(w){if(w.isMinimized())w.restore();w.show();w.focus();}
       }else if(cmd==="QUIT"){
-        global[${JSON.stringify(PATCH_TAG)}]=true;
-        require("electron").app.quit();
+        globalThis[${JSON.stringify(PATCH_TAG)}]=true;
+        __oct_electron.app.quit();
       }
     });
     socket.on("error",()=>{});
   });
-  __oct_server.on("error",()=>{});
+  __oct_server.on("error",(__e)=>console.error("opencode-close-to-tray: pipe server error",__e));
   __oct_server.listen(__oct_pipe);
-}catch(__e){}
+}catch(__e){console.error("opencode-close-to-tray: failed to start pipe server",__e);}
 `;
 code += pipeServerCode;
 console.log("  -> tray pipe server injected");

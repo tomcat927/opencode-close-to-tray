@@ -65,7 +65,6 @@ $SW_RESTORE = 9
 $sync = [hashtable]::Synchronized(@{})
 $sync.PipeName = $PipeName
 $sync.TargetPid = $TargetPid
-$sync.Queue = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
 
 function Get-OcHandle {
     $proc = Get-Process -Id $sync.TargetPid -ErrorAction SilentlyContinue
@@ -106,40 +105,23 @@ function Toggle-Window {
     return Invoke-Window -cmd $SW_RESTORE
 }
 
-# --- named pipe server (background runspace) ---
-$pipeScript = {
-    param($sync)
+# --- named pipe client ---
+function Send-OcCommand {
+    param([string]$Command)
+    $client = $null
     try {
-        $server = [System.IO.Pipes.NamedPipeServerStream]::new($sync.PipeName, [System.IO.Pipes.PipeDirection]::InOut)
+        $client = [System.IO.Pipes.NamedPipeClientStream]::new('.', $sync.PipeName, [System.IO.Pipes.PipeDirection]::Out)
+        $client.Connect(1000)
+        $bytes = [System.Text.Encoding]::ASCII.GetBytes("$Command`n")
+        $client.Write($bytes, 0, $bytes.Length)
+        $client.Flush()
+        return $true
     } catch {
-        return
-    }
-    while ($true) {
-        try {
-            $server.WaitForConnection()
-            $buf = New-Object byte[] 64
-            $total = 0
-            while ($total -lt $buf.Length) {
-                $n = $server.Read($buf, $total, $buf.Length - $total)
-                if ($n -le 0) { break }
-                $total += $n
-                if ($buf[$total - 1] -eq 10) { break }
-            }
-            if ($total -gt 0) {
-                $cmd = [System.Text.Encoding]::ASCII.GetString($buf, 0, $total).Trim()
-                $sync.Queue.Enqueue($cmd)
-            }
-            if ($server.IsConnected) { $server.Disconnect() }
-        } catch {
-            Start-Sleep -Milliseconds 100
-        }
+        return $false
+    } finally {
+        if ($client) { $client.Dispose() }
     }
 }
-$pipeHost = [powershell]::Create()
-$pipeHost.Runspace = [runspacefactory]::CreateRunspace()
-$pipeHost.Runspace.Open()
-$null = $pipeHost.AddScript($pipeScript).AddArgument($sync)
-$null = $pipeHost.BeginInvoke()
 
 # --- tray icon ---
 $tray = New-Object System.Windows.Forms.NotifyIcon
@@ -156,8 +138,9 @@ $itemExit = $menu.Items.Add('Quit opencode')
 $itemShow.Add_Click({ $null = Invoke-Window -cmd $SW_RESTORE })
 $itemHide.Add_Click({ $null = Invoke-Window -cmd $SW_HIDE })
 $itemExit.Add_Click({
-    $null = Invoke-Window -cmd $SW_RESTORE
-    $sync.Queue.Enqueue('QUIT')
+    if (Send-OcCommand -Command 'QUIT') {
+        $tray.Visible = $false
+    }
 })
 
 $tray.Add_MouseUp({
@@ -169,21 +152,10 @@ $tray.Add_MouseUp({
     }
 })
 
-# --- timer: process pipe commands + parent monitor ---
+# --- timer: parent monitor ---
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 200
 $timer.Add_Tick({
-    $cmd = $null
-    while ($sync.Queue.TryDequeue([ref]$cmd)) {
-        switch ($cmd) {
-            'SHOW' { $null = Invoke-Window -cmd $SW_RESTORE }
-            'HIDE' { $null = Invoke-Window -cmd $SW_HIDE }
-            'QUIT' {
-                $tray.Visible = $false
-                [System.Environment]::Exit(0)
-            }
-        }
-    }
     # If parent process exits, clean up
     if (-not (Get-Process -Id $sync.TargetPid -ErrorAction SilentlyContinue)) {
         $tray.Visible = $false
