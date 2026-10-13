@@ -1,0 +1,11 @@
+# Dependencies
+node_modules/
+
+# Temp files from patcher
+.tmp_extract/
+.tmp_patched.asar
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store

@@ -1,0 +1,24 @@
+{
+  "name": "opencode-close-to-tray",
+  "version": "1.0.0",
+  "description": "Patch the opencode desktop app (Electron) to minimize to the system tray when clicking the Close (X) button on Windows.",
+  "type": "commonjs",
+  "main": "./patcher/patch.cjs",
+  "scripts": {
+    "patch": "node patcher/patch.cjs",
+    "restore": "powershell -File restore.ps1"
+  },
+  "keywords": [
+    "opencode",
+    "desktop",
+    "system-tray",
+    "close-to-tray",
+    "windows",
+    "electron",
+    "asar"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@electron/asar": "^3.4.0"
+  }
+}
