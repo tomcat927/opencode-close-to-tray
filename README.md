@@ -53,9 +53,17 @@ The patcher modifies the Electron main process code inside `app.asar`:
 
 3. **Tray helper spawn**: On window creation, spawns a hidden PowerShell process (`tray-helper.ps1`) that creates a `NotifyIcon` with menu items. Communicates with the main process via named pipe (`\\.\pipe\opencode-tray-pipe`).
 
-4. **Second-instance**: Patched to restore and focus the existing window instead of spawning a new one.
+4. **Second-instance**: OpenCode's existing handler restores and focuses the window when its shortcut is opened again.
 
-5. **Pipe server**: The main process listens for `SHOW`/`QUIT` commands from the tray helper.
+5. **Pipe server**: The main process handles `SHOW`/`HIDE`/`TOGGLE`/`QUIT` from the tray helper. Electron retains the window object even while hidden, so restoring does not depend on PowerShell finding a visible `MainWindowHandle`.
+
+## Troubleshooting
+
+If X removes the window but OpenCode remains in Task Manager, the app is hidden. Use the tray icon with tooltip **OpenCode - close to tray**, or open the desktop shortcut again to restore it. Windows may put the icon in the taskbar's hidden-icons area.
+
+The separate `Eugene-Wen/opencode-tray` plugin can create another tray icon. It uses a different pipe and does not intercept X; uninstalling it is not required by this patch. Use this patch's icon when testing restore and Quit.
+
+After installing, manually verify X, tray restore, and tray Quit. `npm test` checks pipe commands and hidden-window recovery; it does not click the actual title-bar X.
 
 ## Handling opencode updates
 

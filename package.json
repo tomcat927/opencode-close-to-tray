@@ -5,6 +5,7 @@
   "type": "commonjs",
   "main": "./patcher/patch.cjs",
   "scripts": {
+    "test": "node --test",
     "patch": "node patcher/patch.cjs",
     "restore": "powershell -File restore.ps1"
   },

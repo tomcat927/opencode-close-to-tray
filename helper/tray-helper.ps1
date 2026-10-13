@@ -15,10 +15,6 @@ Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
 public static class OcWin {
-    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
-    [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hWnd);
-    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool DestroyIcon(IntPtr hIcon);
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
     public static extern int ExtractIconEx(string lpszFile, int nIconIndex, out IntPtr phiconLarge, out IntPtr phiconSmall, uint nIcons);
@@ -58,52 +54,9 @@ function Get-OcIcon {
     return [System.Drawing.SystemIcons]::Application
 }
 
-$SW_HIDE = 0
-$SW_SHOW = 5
-$SW_RESTORE = 9
-
 $sync = [hashtable]::Synchronized(@{})
 $sync.PipeName = $PipeName
 $sync.TargetPid = $TargetPid
-
-function Get-OcHandle {
-    $proc = Get-Process -Id $sync.TargetPid -ErrorAction SilentlyContinue
-    if ($proc -and $proc.MainWindowHandle -ne 0) {
-        return $proc.MainWindowHandle
-    }
-    $candidates = Get-Process -ErrorAction SilentlyContinue | Where-Object {
-        $_.MainWindowHandle -ne 0 -and $_.ProcessName -match 'OpenCode'
-    }
-    if ($candidates) {
-        return ($candidates | Select-Object -First 1).MainWindowHandle
-    }
-    return [IntPtr]::Zero
-}
-
-function Resolve-Handle {
-    if ($sync.Handle -eq $IntPtr::Zero -or $sync.Handle -eq $null -or -not [OcWin]::IsWindow($sync.Handle)) {
-        $sync.Handle = Get-OcHandle
-    }
-    return $sync.Handle
-}
-
-function Invoke-Window {
-    param([int]$cmd)
-    $h = Resolve-Handle
-    if ($h -eq [IntPtr]::Zero) { return $false }
-    [OcWin]::ShowWindow($h, $cmd) | Out-Null
-    if ($cmd -eq $SW_SHOW -or $cmd -eq $SW_RESTORE) {
-        try { [OcWin]::SetForegroundWindow($h) | Out-Null } catch { }
-    }
-    return $true
-}
-
-function Toggle-Window {
-    $h = Resolve-Handle
-    if ($h -eq [IntPtr]::Zero) { return $false }
-    if ([OcWin]::IsWindowVisible($h)) { return Invoke-Window -cmd $SW_HIDE }
-    return Invoke-Window -cmd $SW_RESTORE
-}
 
 # --- named pipe client ---
 function Send-OcCommand {
@@ -126,7 +79,7 @@ function Send-OcCommand {
 # --- tray icon ---
 $tray = New-Object System.Windows.Forms.NotifyIcon
 $tray.Icon = Get-OcIcon
-$tray.Text = 'opencode — close to tray'
+$tray.Text = 'OpenCode - close to tray'
 $tray.Visible = $true
 
 $menu = New-Object System.Windows.Forms.ContextMenuStrip
@@ -135,8 +88,8 @@ $itemHide = $menu.Items.Add('Hide to tray')
 $null = $menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
 $itemExit = $menu.Items.Add('Quit opencode')
 
-$itemShow.Add_Click({ $null = Invoke-Window -cmd $SW_RESTORE })
-$itemHide.Add_Click({ $null = Invoke-Window -cmd $SW_HIDE })
+$itemShow.Add_Click({ $null = Send-OcCommand -Command 'SHOW' })
+$itemHide.Add_Click({ $null = Send-OcCommand -Command 'HIDE' })
 $itemExit.Add_Click({
     if (Send-OcCommand -Command 'QUIT') {
         $tray.Visible = $false
@@ -148,7 +101,7 @@ $tray.Add_MouseUp({
     if ($e.Button -eq [System.Windows.Forms.MouseButtons]::Right) {
         $menu.Show([System.Windows.Forms.Cursor]::Position)
     } elseif ($e.Button -eq [System.Windows.Forms.MouseButtons]::Left) {
-        $null = Toggle-Window
+        $null = Send-OcCommand -Command 'TOGGLE'
     }
 })
 

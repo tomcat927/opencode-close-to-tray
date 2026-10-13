@@ -15,7 +15,9 @@
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const os = require("os");
 const { execSync } = require("child_process");
+const { createTrayPipeServer } = require("./tray-pipe.cjs");
 
 // ---------------------------------------------------------------------------
 // Paths — resolve the opencode desktop install directory.
@@ -35,8 +37,10 @@ const USER_DATA = path.join(process.env.APPDATA, "ai.opencode.desktop");
 const V8_CACHE_DIR = path.join(USER_DATA, "Code Cache", "js");
 
 const ROOT_DIR = path.resolve(__dirname, "..");
-const TEMP_DIR = path.join(ROOT_DIR, ".tmp_extract");
-const TEMP_ASAR = path.join(ROOT_DIR, ".tmp_patched.asar");
+const TEMP_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-tray-patch-"));
+const TEMP_DIR = path.join(TEMP_ROOT, "extract");
+const TEMP_ASAR = path.join(TEMP_ROOT, "patched.asar");
+process.on("exit", () => fs.rmSync(TEMP_ROOT, { recursive: true, force: true }));
 
 const HELPER_SRC = path.join(ROOT_DIR, "helper", "tray-helper.ps1");
 const HELPER_DST = path.join(RESOURCES_DIR, "tray-helper.ps1");
@@ -239,7 +243,7 @@ code = replaceRequired(
 
 // OpenCode already restores and focuses the window in its second-instance handler.
 
-// --- Patch G: Named pipe server for tray commands (SHOW/QUIT) ---
+// --- Patch G: Named pipe server for all tray window operations ---
 // Inject near the end of the file, before the last expression
 const pipeServerCode = `
 // --- opencode-close-to-tray: pipe server for tray helper ---
@@ -247,19 +251,7 @@ try{
   const __oct_net=require2("node:net");
   const __oct_electron=require2("electron");
   const __oct_pipe="\\\\\\\\.\\\\pipe\\\\opencode-tray-pipe";
-  const __oct_server=__oct_net.createServer((socket)=>{
-    socket.on("data",(buf)=>{
-      const cmd=buf.toString().trim();
-      if(cmd==="SHOW"){
-        const w=__oct_electron.BrowserWindow.getAllWindows()[0];
-        if(w){if(w.isMinimized())w.restore();w.show();w.focus();}
-      }else if(cmd==="QUIT"){
-        globalThis[${JSON.stringify(PATCH_TAG)}]=true;
-        __oct_electron.app.quit();
-      }
-    });
-    socket.on("error",()=>{});
-  });
+  const __oct_server=(${createTrayPipeServer.toString()})(__oct_net,__oct_electron,globalThis,()=>getLastFocusedWindow()||__oct_electron.BrowserWindow.getAllWindows()[0]);
   __oct_server.on("error",(__e)=>console.error("opencode-close-to-tray: pipe server error",__e));
   __oct_server.listen(__oct_pipe);
 }catch(__e){console.error("opencode-close-to-tray: failed to start pipe server",__e);}
